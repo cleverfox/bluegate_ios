@@ -16,6 +16,7 @@ struct AdminView: View {
                 Picker("Tab", selection: $selectedTab) {
                     Text("Keys").tag(0)
                     Text("Settings").tag(1)
+                    Text("Manual control").tag(2)
                 }
                 .pickerStyle(.segmented)
                 .padding()
@@ -26,8 +27,10 @@ struct AdminView: View {
                 // Tab content
                 if selectedTab == 0 {
                     KeysTab(device: device, bleManager: bleManager)
-                } else {
+                } else if selectedTab == 1 {
                     SettingsTab(device: device, bleManager: bleManager, gateName: $gateName)
+                } else if selectedTab == 2 {
+                    ManualControlTab(device: device, bleManager: bleManager)
                 }
             }
             .navigationTitle("Admin: \(device.name)")
@@ -59,6 +62,107 @@ struct AdminView: View {
                 DispatchQueue.main.async {
                     isLoadingName = false
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Manual Control Tab
+
+struct ManualControlTab: View {
+    @ObservedObject var device: BlueGateDevice
+    var bleManager: BLEManager
+
+    @State private var isLoading: Bool = false
+    @State private var showingAlert: Bool = false
+    @State private var alertTitle: String = ""
+    @State private var alertMessage: String = ""
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Text("Manual control")
+                .font(.headline)
+                .padding(.top, 24)
+
+            Text("Use these buttons to open or close the gate manually. The 'Open' command disables autoclose; 'Close' will close the gate if autoclose is disabled.")
+                .font(.caption)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
+            HStack(spacing: 32) {
+                Button {
+                    performManualAction(action: 2)
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.up.circle.fill")
+                        Text("Open")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isLoading)
+
+                Button {
+                    performManualAction(action: 3)
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.down.circle.fill")
+                        Text("Close")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .disabled(isLoading)
+            }
+            .padding(.horizontal)
+            .padding(.top, 16)
+
+            if isLoading {
+                ProgressView("Processing...")
+                    .padding(.top, 24)
+            }
+
+            Spacer()
+        }
+        .alert(alertTitle, isPresented: $showingAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(alertMessage)
+        }
+    }
+
+    private func performManualAction(action: UInt16) {
+        guard device.state == .connected || device.state == .authenticated else {
+            alertTitle = "Error"
+            alertMessage = "Device is not connected or ready."
+            showingAlert = true
+            return
+        }
+        isLoading = true
+        Task {
+            do {
+                try await bleManager.setAuthAction(device: device, action: action)
+                try await withCheckedThrowingContinuation { continuation in
+                    bleManager.authenticate(device: device) { result in
+                        isLoading = false
+                        switch result {
+                        case .success:
+                            alertTitle = "Success"
+                            alertMessage = (action == 2) ? "Gate opened (autoclose disabled)." : "Gate closed."
+                        case .failure(let error):
+                            alertTitle = "Error"
+                            alertMessage = error.localizedDescription
+                        }
+                        showingAlert = true
+                        continuation.resume()
+                    }
+                }
+            } catch {
+                isLoading = false
+                alertTitle = "Error"
+                alertMessage = error.localizedDescription
+                showingAlert = true
             }
         }
     }
@@ -102,7 +206,6 @@ struct KeysTab: View {
         }
     }
     
-    // Strips all whitespace and newline characters from keyHex
     private var cleanedKeyHex: String {
         keyHex.replacingOccurrences(of: "\\s", with: "", options: .regularExpression)
     }
